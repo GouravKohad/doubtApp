@@ -1,211 +1,159 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>Student Doubts App</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <!-- Tailwind CSS -->
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Doubt Sharing App</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <!-- Firebase SDK -->
-  <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-auth-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-firestore-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-storage-compat.js"></script>
+  <script src="https://unpkg.com/@supabase/supabase-js@2"></script>
 </head>
 <body class="bg-gray-100">
-  <div id="app" class="max-w-2xl mx-auto p-4"></div>
+  <div class="max-w-2xl mx-auto p-4">
+    <!-- Auth -->
+    <div id="auth" class="mb-6 text-center"></div>
+
+    <!-- Leaderboard -->
+    <div id="leaderboard" class="hidden bg-white p-3 rounded-xl shadow mb-6">
+      <h2 class="font-semibold mb-2">🏆 Leaderboard</h2>
+      <div id="leaders"></div>
+    </div>
+
+    <!-- New Post -->
+    <div id="newpost" class="hidden bg-white shadow rounded-xl p-4 mb-6">
+      <textarea id="postText" class="w-full p-2 border rounded-lg" placeholder="Ask a doubt..."></textarea>
+      <input id="postFile" type="file" accept="image/*" class="mt-2"/>
+      <button onclick="handlePost()" class="bg-blue-600 text-white px-4 py-1 rounded-lg mt-2">Post</button>
+    </div>
+
+    <!-- Feed -->
+    <div id="feed"></div>
+  </div>
 
 <script>
-  // ✅ Your Firebase config
-  const firebaseConfig = {
-    apiKey: "AIzaSyAgCjl2vqr1k_X7uFXx6_wx5czRat3-0jg",
-    authDomain: "doubtapp-a95cb.firebaseapp.com",
-    projectId: "doubtapp-a95cb",
-    storageBucket: "doubtapp-a95cb.appspot.com",
-    messagingSenderId: "111015534504",
-    appId: "1:111015534504:web:db636e140519dc5f48c79d",
-    measurementId: "G-KCN7PPNYS2"
-  };
+  // 🔑 Your Supabase project details
+  const SUPABASE_URL = "https://krgtvrvdstzpzcaalbie.supabase.co";
+  const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtyZ3R2cnZkc3R6cHpjYWFsYmllIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTU4NTM1NTEsImV4cCI6MjA3MTQyOTU1MX0.JGPf9cQ2mVHTjkRFJpivuaN2CQKk8utnX1NxIi6Infk";
 
-  // 🔥 Init Firebase
-  firebase.initializeApp(firebaseConfig);
-  const auth = firebase.auth();
-  const db = firebase.firestore();
-  const storage = firebase.storage();
+  // ✅ Supabase client
+  const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+  let currentUser = null;
 
-  const appDiv = document.getElementById("app");
-
-  // ✅ Render Login UI
-  function renderLogin() {
-    appDiv.innerHTML = `
-      <div class="flex justify-center mt-20">
-        <button id="loginBtn" class="bg-blue-600 text-white px-6 py-2 rounded-lg shadow">
-          Sign in with Google
-        </button>
-      </div>
-    `;
-    document.getElementById("loginBtn").onclick = async () => {
-      const provider = new firebase.auth.GoogleAuthProvider();
-      await auth.signInWithPopup(provider);
-    };
+  // 🔐 Auth
+  async function checkAuth() {
+    const { data: { session } } = await db.auth.getSession();
+    currentUser = session?.user || null;
+    renderAuth();
+    if (currentUser) { loadPosts(); loadLeaderboard(); }
+  }
+  async function login() {
+    await db.auth.signInWithOAuth({ provider: 'google' });
+  }
+  async function logout() {
+    await db.auth.signOut();
+    currentUser=null; renderAuth();
+  }
+  function renderAuth(){
+    const el=document.getElementById('auth');
+    if(!currentUser){
+      el.innerHTML=`<button onclick="login()" class="bg-blue-600 text-white px-6 py-2 rounded-lg shadow">Sign in with Google</button>`;
+      document.getElementById('newpost').style.display="none";
+      document.getElementById('leaderboard').style.display="none";
+    }else{
+      el.innerHTML=`Hello, ${currentUser.email} <button onclick="logout()" class="text-sm underline">Logout</button>`;
+      document.getElementById('newpost').style.display="block";
+      document.getElementById('leaderboard').style.display="block";
+    }
   }
 
-  // ✅ Render Main UI
-  function renderApp(user) {
-    appDiv.innerHTML = `
-      <div class="flex justify-between items-center mb-6">
-        <h1 class="text-2xl font-bold">Student Doubts</h1>
-        <button id="logoutBtn" class="text-sm underline">Logout</button>
-      </div>
+  // 📝 Create Post
+  async function handlePost(){
+    const text=document.getElementById('postText').value.trim();
+    const file=document.getElementById('postFile').files[0];
+    if(!text && !file) return;
 
-      <!-- Leaderboard -->
-      <div id="leaderboard" class="bg-white p-3 rounded-xl shadow mb-6"></div>
+    let imageUrl=null;
+    if(file){
+      const path=`posts/${Date.now()}-${file.name}`;
+      await db.storage.from('doubts').upload(path, file, { upsert:true });
+      const { data } = db.storage.from('doubts').getPublicUrl(path);
+      imageUrl=data.publicUrl;
+    }
 
-      <!-- Post box -->
-      <div class="bg-white shadow rounded-xl p-4 mb-6">
-        <textarea id="postText" class="w-full p-2 border rounded-lg" placeholder="Ask a doubt..."></textarea>
-        <input id="postImage" type="file" accept="image/*" class="mt-2">
-        <button id="postBtn" class="bg-blue-600 text-white px-4 py-1 rounded-lg mt-2">Post</button>
-      </div>
+    await db.from('posts').insert({
+      text,
+      image:imageUrl,
+      uid:currentUser.id,
+      author:currentUser.email,
+      likes:0,
+      comments:[]
+    });
 
-      <!-- Feed -->
-      <div id="feed"></div>
-    `;
-
-    document.getElementById("logoutBtn").onclick = () => auth.signOut();
-    document.getElementById("postBtn").onclick = handlePost;
+    document.getElementById('postText').value="";
+    document.getElementById('postFile').value="";
     loadPosts();
   }
 
-  // ✅ Post a new doubt
-  async function handlePost() {
-    const text = document.getElementById("postText").value;
-    const file = document.getElementById("postImage").files[0];
-    if (!text && !file) return;
-
-    let imageUrl = null;
-    if (file) {
-      const ref = storage.ref("posts/" + Date.now() + "-" + file.name);
-      await ref.put(file);
-      imageUrl = await ref.getDownloadURL();
-    }
-
-    await db.collection("posts").add({
-      text,
-      image: imageUrl,
-      uid: auth.currentUser.uid,
-      author: auth.currentUser.displayName,
-      likes: 0,
-      comments: [],
-      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-    });
-
-    document.getElementById("postText").value = "";
-    document.getElementById("postImage").value = "";
+  // ❤️ Like
+  async function handleLike(id, likes){
+    await db.from('posts').update({ likes:likes+1 }).eq('id', id);
+    loadPosts();
   }
 
-  // ✅ Load posts
-  function loadPosts() {
-    db.collection("posts").orderBy("createdAt","desc").onSnapshot((snap) => {
-      const posts = [];
-      const scores = {};
-      snap.forEach((doc) => {
-        const p = {id: doc.id, ...doc.data()};
-        posts.push(p);
-        if (p.uid) {
-          if (!scores[p.uid]) scores[p.uid] = { name: p.author, score: 0 };
-          scores[p.uid].score += (p.likes||0) + (p.accepted ? 5 : 0);
-        }
-      });
-      renderPosts(posts);
-      renderLeaderboard(Object.values(scores).sort((a,b)=>b.score-a.score));
-    });
+  // 💬 Comment
+  async function handleComment(id){
+    const input=document.getElementById(`cmt-${id}`);
+    const txt=input.value.trim();
+    if(!txt) return;
+    const { data } = await db.from('posts').select('comments').eq('id',id).single();
+    const comments=data.comments||[];
+    comments.push({author:currentUser.email,text:txt});
+    await db.from('posts').update({comments}).eq('id',id);
+    input.value="";
+    loadPosts();
   }
 
-  // ✅ Render posts
-  function renderPosts(posts) {
-    const feed = document.getElementById("feed");
-    feed.innerHTML = "";
-    posts.forEach((post) => {
-      const div = document.createElement("div");
-      div.className = "bg-white shadow rounded-xl p-4 mb-4";
-      div.innerHTML = `
-        <p class="font-semibold">${post.author}</p>
-        <p>${post.text||""}</p>
-        ${post.image ? `<img src="${post.image}" class="rounded-lg mt-2"/>` : ""}
+  // 📡 Load posts
+  async function loadPosts(){
+    const { data } = await db.from('posts').select('*').order('id',{ascending:false});
+    const feed=document.getElementById('feed');
+    feed.innerHTML="";
+    data.forEach(p=>{
+      const div=document.createElement('div');
+      div.className="bg-white shadow rounded-xl p-4 mb-4";
+      div.innerHTML=`
+        <p class="font-semibold">${p.author}</p>
+        <p>${p.text||""}</p>
+        ${p.image?`<img src="${p.image}" class="rounded-lg mt-2"/>`:""}
         <div class="flex items-center gap-4 mt-3 text-gray-600">
-          <button class="likeBtn flex items-center gap-1 hover:text-blue-600" data-id="${post.id}">
-            👍 ${post.likes}
-          </button>
-          <span>💬 ${post.comments?.length||0}</span>
+          <button onclick="handleLike(${p.id},${p.likes})" class="hover:text-blue-600">👍 ${p.likes}</button>
+          <span>💬 ${p.comments?.length||0}</span>
         </div>
-        <div class="mt-3" id="comments-${post.id}">
-          ${(post.comments||[]).map(c => `
-            <div class="text-sm bg-gray-100 p-2 rounded-lg mb-1">
-              <span class="font-semibold">${c.author}: </span>${c.text||""}
-              ${c.file ? `<audio controls src="${c.file}" class="mt-1"></audio>` : ""}
-            </div>
-          `).join("")}
-          <input id="cmtText-${post.id}" class="border p-1 rounded-lg w-full mt-1" placeholder="Write a comment..."/>
-          <input id="cmtFile-${post.id}" type="file" accept="audio/*" class="mt-1"/>
-          <button class="sendCmt bg-blue-600 text-white px-3 py-1 rounded-lg mt-1" data-id="${post.id}">Send</button>
+        <div class="mt-2">
+          ${(p.comments||[]).map(c=>`<div class="text-sm bg-gray-100 p-1 rounded mb-1"><b>${c.author}:</b> ${c.text}</div>`).join("")}
+          <input id="cmt-${p.id}" class="border p-1 text-sm w-3/4 rounded" placeholder="Write a comment"/>
+          <button onclick="handleComment(${p.id})" class="bg-blue-600 text-white px-2 py-1 rounded text-sm">Send</button>
         </div>
       `;
       feed.appendChild(div);
     });
-
-    document.querySelectorAll(".likeBtn").forEach(btn => {
-      btn.onclick = () => {
-        const id = btn.dataset.id;
-        db.collection("posts").doc(id).update({ likes: firebase.firestore.FieldValue.increment(1) });
-      };
-    });
-
-    document.querySelectorAll(".sendCmt").forEach(btn => {
-      btn.onclick = async () => {
-        const id = btn.dataset.id;
-        const text = document.getElementById("cmtText-"+id).value;
-        const file = document.getElementById("cmtFile-"+id).files[0];
-        let fileUrl = null;
-        if (file) {
-          const ref = storage.ref("comments/" + Date.now() + "-" + file.name);
-          await ref.put(file);
-          fileUrl = await ref.getDownloadURL();
-        }
-        await db.collection("posts").doc(id).update({
-          comments: firebase.firestore.FieldValue.arrayUnion({
-            uid: auth.currentUser.uid,
-            author: auth.currentUser.displayName,
-            text,
-            file: fileUrl,
-            createdAt: Date.now()
-          })
-        });
-        document.getElementById("cmtText-"+id).value="";
-        document.getElementById("cmtFile-"+id).value="";
-      };
-    });
   }
 
-  // ✅ Render leaderboard
-  function renderLeaderboard(leaders) {
-    const lb = document.getElementById("leaderboard");
-    lb.innerHTML = `
-      <h2 class="font-semibold mb-2">🏆 Leaderboard</h2>
-      ${leaders.map((l,i)=>`
-        <div class="flex justify-between text-sm mb-1">
-          <span>${i+1}. ${l.name}</span>
-          <span>${l.score} pts</span>
-        </div>
-      `).join("")}
-    `;
+  // 🏆 Leaderboard
+  async function loadLeaderboard(){
+    const { data } = await db.from('posts').select('*');
+    const scores={};
+    data.forEach(p=>{
+      if(!p.uid) return;
+      if(!scores[p.uid]) scores[p.uid]={name:p.author,score:0};
+      scores[p.uid].score+=(p.likes||0)+(p.comments?.length||0);
+    });
+    const arr=Object.values(scores).sort((a,b)=>b.score-a.score);
+    document.getElementById('leaders').innerHTML=arr.map((l,i)=>`<div class="flex justify-between"><span>${i+1}. ${l.name}</span><span>${l.score} pts</span></div>`).join("");
   }
 
-  // 🔄 Auth state listener
-  auth.onAuthStateChanged(user => {
-    if (!user) renderLogin();
-    else renderApp(user);
-  });
+  // Start
+  checkAuth();
+  db.auth.onAuthStateChange(()=>checkAuth());
 </script>
 </body>
 </html>
